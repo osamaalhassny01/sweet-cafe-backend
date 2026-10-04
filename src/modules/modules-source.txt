@@ -1,0 +1,2684 @@
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\admin\admin.controller.ts 
+============================================================ 
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { ApiTags } from '@nestjs/swagger';
+import { AdminRole } from '@prisma/client';
+import { AdminRoles } from '../../common/decorators/admin-roles.decorator';
+import { AdminTokenGuard } from '../../common/guards/admin-token.guard';
+import { CreateCategoryDto } from '../categories/dto/create-category.dto';
+import { UpdateCategoryDto } from '../categories/dto/update-category.dto';
+import { CreateOfferDto } from '../offers/dto/create-offer.dto';
+import { UpdateOfferDto } from '../offers/dto/update-offer.dto';
+import { UpdateOrderStatusDto } from '../orders/dto/update-order-status.dto';
+import { CreateProductDto } from '../products/dto/create-product.dto';
+import { UpdateProductDto } from '../products/dto/update-product.dto';
+import { AdminService } from './admin.service';
+import { DeliveryZonesService } from '../delivery-zones/delivery-zones.service';
+import { CreateDeliveryZoneDto } from '../delivery-zones/dto/create-delivery-zone.dto';
+import { UpdateDeliveryZoneDto } from '../delivery-zones/dto/update-delivery-zone.dto';
+import { PrismaService } from '../../prisma/prisma.service';
+import { AdminOrderQueryDto } from '../orders/dto/admin-order-query.dto';
+
+import { ProductsService } from '../products/products.service';
+import { ProductQueryDto } from '../products/dto/product-query.dto';
+
+@ApiTags('Admin')
+@UseGuards(AdminTokenGuard)
+@Controller('admin')
+export class AdminController {
+  constructor(
+    private readonly adminService: AdminService,
+    private readonly deliveryZonesService: DeliveryZonesService,
+    private readonly productsService: ProductsService,
+    private readonly prisma: PrismaService,
+  ) {}
+
+  @Get('categories')
+  findCategories() {
+    return this.adminService.findAllCategories();
+  }
+
+  @Post('categories')
+  @AdminRoles(AdminRole.PRODUCTS_STAFF)
+  createCategory(@Body() dto: CreateCategoryDto) {
+    return this.adminService.createCategory(dto);
+  }
+
+  @Patch('categories/:id')
+  @AdminRoles(AdminRole.PRODUCTS_STAFF)
+  updateCategory(@Param('id') id: string, @Body() dto: UpdateCategoryDto) {
+    return this.adminService.updateCategory(id, dto);
+  }
+
+  @Delete('categories/:id')
+  @AdminRoles(AdminRole.ADMIN)
+  deleteCategory(@Param('id') id: string) {
+    return this.adminService.deleteCategory(id);
+  }
+
+  @Get('products')
+  findProducts(@Query() query: ProductQueryDto) {
+    return this.productsService.findAdmin(query);
+  }
+
+  @Get('products/:id')
+  findProduct(@Param('id') id: string) {
+    return this.productsService.findAdminById(id);
+  }
+
+  @Post('products')
+  @AdminRoles(AdminRole.PRODUCTS_STAFF)
+  createProduct(@Body() dto: CreateProductDto) {
+    return this.adminService.createProduct(dto);
+  }
+
+  @Patch('products/:id')
+  @AdminRoles(AdminRole.PRODUCTS_STAFF)
+  updateProduct(@Param('id') id: string, @Body() dto: UpdateProductDto) {
+    return this.adminService.updateProduct(id, dto);
+  }
+
+  @Delete('products/:id')
+  @AdminRoles(AdminRole.ADMIN)
+  deleteProduct(@Param('id') id: string) {
+    return this.adminService.deleteProduct(id);
+  }
+
+  @Get('orders')
+  @AdminRoles(AdminRole.ORDERS_STAFF)
+  findOrders(@Query() query: AdminOrderQueryDto) {
+    return this.adminService.findOrders(query);
+  }
+
+  @Get('orders/:id')
+  @AdminRoles(AdminRole.ORDERS_STAFF)
+  findOrder(@Param('id') id: string) {
+    return this.adminService.findOrder(id);
+  }
+
+  @Patch('orders/:id/status')
+  @AdminRoles(AdminRole.ORDERS_STAFF)
+  updateOrderStatus(@Param('id') id: string, @Body() dto: UpdateOrderStatusDto) {
+    return this.adminService.updateOrderStatus(id, dto);
+  }
+
+  @Get('stats')
+  async getDashboardStats() {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const [
+      totalOrders,
+      todayOrders,
+      totalRevenue,
+      todayRevenue,
+      totalProducts,
+      totalCategories,
+      pendingOrders,
+      ordersByStatus,
+      recentOrders,
+      topProducts,
+    ] = await Promise.all([
+      this.prisma.order.count(),
+      this.prisma.order.count({ where: { createdAt: { gte: today } } }),
+      this.prisma.order.aggregate({
+        _sum: { totalAmount: true },
+        where: { status: { notIn: ['CANCELLED'] } },
+      }),
+      this.prisma.order.aggregate({
+        _sum: { totalAmount: true },
+        where: { status: { notIn: ['CANCELLED'] }, createdAt: { gte: today } },
+      }),
+      this.prisma.product.count({ where: { isActive: true } }),
+      this.prisma.category.count({ where: { isActive: true } }),
+      this.prisma.order.count({ where: { status: { in: ['NEW', 'PENDING'] } } }),
+      this.prisma.order.groupBy({
+        by: ['status'],
+        _count: { _all: true },
+      }),
+      this.prisma.order.findMany({
+        take: 10,
+        orderBy: { createdAt: 'desc' },
+        include: { items: true, deliveryZone: true },
+      }),
+      this.prisma.orderItem.groupBy({
+        by: ['productName'],
+        _sum: { quantity: true },
+        _count: { _all: true },
+        orderBy: { _sum: { quantity: 'desc' } },
+        take: 5,
+      }),
+    ]);
+
+    return {
+      totalOrders,
+      todayOrders,
+      totalRevenue: totalRevenue._sum.totalAmount || 0,
+      todayRevenue: todayRevenue._sum.totalAmount || 0,
+      totalProducts,
+      totalCategories,
+      pendingOrders,
+      ordersByStatus: ordersByStatus.map(item => ({
+        status: item.status,
+        count: item._count._all,
+      })),
+      recentOrders,
+      topProducts: topProducts.map(item => ({
+        name: item.productName,
+        quantity: item._sum.quantity,
+        orderCount: item._count._all,
+      })),
+    };
+  }
+
+  @Get('stats/revenue-timeline')
+  async getRevenueTimeline(@Query('days') days: string = '30') {
+    const daysNum = parseInt(days, 10) || 30;
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - daysNum);
+    startDate.setHours(0, 0, 0, 0);
+
+    const data = await this.prisma.$queryRaw<Array<{ date: Date; revenue: any }>>`
+      SELECT DATE("createdAt") as date, COALESCE(SUM("totalAmount"), 0) as revenue
+      FROM "Order"
+      WHERE "createdAt" >= ${startDate} AND "status" != 'CANCELLED'
+      GROUP BY DATE("createdAt")
+      ORDER BY date ASC
+    `;
+    
+    return data.map(item => ({
+      date: item.date,
+      revenue: Number(item.revenue),
+    }));
+  }
+
+  @Get('stats/orders-timeline')
+  async getOrdersTimeline(@Query('days') days: string = '30') {
+    const daysNum = parseInt(days, 10) || 30;
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - daysNum);
+    startDate.setHours(0, 0, 0, 0);
+
+    const data = await this.prisma.$queryRaw<Array<{ date: Date; count: any }>>`
+      SELECT DATE("createdAt") as date, COUNT(*) as count
+      FROM "Order"
+      WHERE "createdAt" >= ${startDate}
+      GROUP BY DATE("createdAt")
+      ORDER BY date ASC
+    `;
+    
+    return data.map(item => ({
+      date: item.date,
+      count: Number(item.count),
+    }));
+  }
+
+  @Get('offers')
+  findOffers() {
+    return this.adminService.findAllOffers();
+  }
+
+  @Post('offers')
+  @AdminRoles(AdminRole.PRODUCTS_STAFF)
+  createOffer(@Body() dto: CreateOfferDto) {
+    return this.adminService.createOffer(dto);
+  }
+
+  @Patch('offers/:id')
+  @AdminRoles(AdminRole.PRODUCTS_STAFF)
+  updateOffer(@Param('id') id: string, @Body() dto: UpdateOfferDto) {
+    return this.adminService.updateOffer(id, dto);
+  }
+
+  @Delete('offers/:id')
+  @AdminRoles(AdminRole.ADMIN)
+  deleteOffer(@Param('id') id: string) {
+    return this.adminService.deleteOffer(id);
+  }
+
+  @Get('delivery-zones')
+  findDeliveryZones() {
+    return this.deliveryZonesService.findAll();
+  }
+
+  @Post('delivery-zones')
+  @AdminRoles(AdminRole.ADMIN)
+  createDeliveryZone(@Body() dto: CreateDeliveryZoneDto) {
+    return this.deliveryZonesService.create(dto);
+  }
+
+  @Patch('delivery-zones/:id')
+  @AdminRoles(AdminRole.ADMIN)
+  updateDeliveryZone(@Param('id') id: string, @Body() dto: UpdateDeliveryZoneDto) {
+    return this.deliveryZonesService.update(id, dto);
+  }
+
+  @Delete('delivery-zones/:id')
+  @AdminRoles(AdminRole.ADMIN)
+  deleteDeliveryZone(@Param('id') id: string) {
+    return this.deliveryZonesService.delete(id);
+  }
+}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\admin\admin.module.ts 
+============================================================ 
+import { Module } from '@nestjs/common';
+import { AdminService } from './admin.service';
+import { AdminController } from './admin.controller';
+import { PrismaModule } from '../../prisma/prisma.module';
+import { CategoriesModule } from '../categories/categories.module';
+import { ProductsModule } from '../products/products.module';
+import { OrdersModule } from '../orders/orders.module';
+import { OffersModule } from '../offers/offers.module';
+import { DeliveryZonesModule } from '../delivery-zones/delivery-zones.module';
+import { AuthModule } from '../auth/auth.module';
+
+@Module({
+  imports: [
+    PrismaModule,
+    CategoriesModule,
+    ProductsModule,
+    OrdersModule,
+    OffersModule,
+    DeliveryZonesModule,
+    AuthModule,
+  ],
+  controllers: [AdminController],
+  providers: [AdminService],
+})
+export class AdminModule {}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\admin\admin.service.ts 
+============================================================ 
+import { Injectable } from '@nestjs/common';
+import { CategoriesService } from '../categories/categories.service';
+import { CreateCategoryDto } from '../categories/dto/create-category.dto';
+import { UpdateCategoryDto } from '../categories/dto/update-category.dto';
+import { CreateOfferDto } from '../offers/dto/create-offer.dto';
+import { UpdateOfferDto } from '../offers/dto/update-offer.dto';
+import { OffersService } from '../offers/offers.service';
+import { OrdersService } from '../orders/orders.service';
+import { UpdateOrderStatusDto } from '../orders/dto/update-order-status.dto';
+import { CreateProductDto } from '../products/dto/create-product.dto';
+import { UpdateProductDto } from '../products/dto/update-product.dto';
+import { ProductsService } from '../products/products.service';
+import { PrismaService } from '../../prisma/prisma.service';
+import { AdminOrderQueryDto } from '../orders/dto/admin-order-query.dto';
+import { Prisma } from '@prisma/client';
+import { buildPaginationMeta, paginationSkip } from '../../common/utils/pagination.util';
+
+@Injectable()
+export class AdminService {
+  constructor(
+    private readonly categoriesService: CategoriesService,
+    private readonly productsService: ProductsService,
+    private readonly ordersService: OrdersService,
+    private readonly offersService: OffersService,
+    private readonly prisma: PrismaService,
+  ) {}
+
+  createCategory(dto: CreateCategoryDto) {
+    return this.categoriesService.create(dto);
+  }
+
+  findAllCategories() {
+    return this.categoriesService.findAll();
+  }
+
+  updateCategory(id: string, dto: UpdateCategoryDto) {
+    return this.categoriesService.update(id, dto);
+  }
+
+  deleteCategory(id: string) {
+    return this.categoriesService.softDelete(id);
+  }
+
+  createProduct(dto: CreateProductDto) {
+    return this.productsService.create(dto);
+  }
+
+  updateProduct(id: string, dto: UpdateProductDto) {
+    return this.productsService.update(id, dto);
+  }
+
+  deleteProduct(id: string) {
+    return this.productsService.softDelete(id);
+  }
+
+  async findOrders(query: AdminOrderQueryDto) {
+    const {
+      page = 1,
+      limit = 10,
+      status,
+      type,
+      startDate,
+      endDate,
+      search,
+      sortBy = 'createdAt',
+      sortOrder = 'desc',
+    } = query;
+
+    const where: Prisma.OrderWhereInput = {};
+
+    if (status) {
+      where.status = status;
+    }
+
+    if (type) {
+      where.orderType = type;
+    }
+
+    if (startDate || endDate) {
+      where.createdAt = {};
+      if (startDate) {
+        where.createdAt.gte = new Date(startDate);
+      }
+      if (endDate) {
+        where.createdAt.lte = new Date(endDate);
+      }
+    }
+
+    if (search) {
+      where.OR = [
+        { orderNumber: { contains: search, mode: 'insensitive' } },
+        { customerName: { contains: search, mode: 'insensitive' } },
+        { customerPhone: { contains: search, mode: 'insensitive' } },
+      ];
+    }
+
+    const [data, total] = await Promise.all([
+      this.prisma.order.findMany({
+        where,
+        skip: paginationSkip(page, limit),
+        take: limit,
+        orderBy: { [sortBy]: sortOrder },
+        include: {
+          items: true,
+          deliveryZone: true,
+        },
+      }),
+      this.prisma.order.count({ where }),
+    ]);
+
+    return {
+      data,
+      meta: buildPaginationMeta(page, limit, total),
+    };
+  }
+
+  findOrder(id: string) {
+    return this.ordersService.findOne(id);
+  }
+
+  updateOrderStatus(id: string, dto: UpdateOrderStatusDto) {
+    return this.ordersService.updateStatus(id, dto);
+  }
+
+  createOffer(dto: CreateOfferDto) {
+    return this.offersService.create(dto);
+  }
+
+  findAllOffers() {
+    return this.offersService.findAll();
+  }
+
+  updateOffer(id: string, dto: UpdateOfferDto) {
+    return this.offersService.update(id, dto);
+  }
+
+  deleteOffer(id: string) {
+    return this.offersService.softDelete(id);
+  }
+}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\auth\auth.controller.ts 
+============================================================ 
+import { Body, Controller, Delete, Get, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import { ApiTags } from '@nestjs/swagger';
+import { AuthGuard } from '@nestjs/passport';
+import { AdminRole } from '@prisma/client';
+import { AuthService } from './auth.service';
+import { LoginDto } from './dto/login.dto';
+import { RegisterDto } from './dto/register.dto';
+import { CustomerLoginDto, CustomerRegisterDto } from './dto/customer-auth.dto';
+import { UpdateAdminUserDto } from './dto/update-admin-user.dto';
+import { AdminTokenGuard } from '../../common/guards/admin-token.guard';
+import { AdminRoles } from '../../common/decorators/admin-roles.decorator';
+
+@ApiTags('Auth')
+@Controller('admin/auth')
+export class AdminAuthController {
+  constructor(private readonly authService: AuthService) {}
+
+  @Post('login')
+  async login(@Body() dto: LoginDto) {
+    return this.authService.login(dto);
+  }
+
+  @Post('register')
+  @UseGuards(AdminTokenGuard)
+  @AdminRoles(AdminRole.ADMIN)
+  async register(@Body() dto: RegisterDto) {
+    return this.authService.register(dto);
+  }
+
+  @Get('users')
+  @UseGuards(AdminTokenGuard)
+  @AdminRoles(AdminRole.ADMIN)
+  async listUsers() {
+    return this.authService.listAdminUsers();
+  }
+
+  @Patch('users/:id')
+  @UseGuards(AdminTokenGuard)
+  @AdminRoles(AdminRole.ADMIN)
+  async updateUser(@Param('id') id: string, @Body() dto: UpdateAdminUserDto) {
+    return this.authService.updateAdminUser(id, dto);
+  }
+
+  @Delete('users/:id')
+  @UseGuards(AdminTokenGuard)
+  @AdminRoles(AdminRole.ADMIN)
+  async deactivateUser(@Param('id') id: string) {
+    return this.authService.deactivateAdminUser(id);
+  }
+
+  @Get('profile')
+  @UseGuards(AuthGuard('jwt'))
+  async getProfile(@Req() req: any) {
+    return this.authService.getProfile(req.user.id);
+  }
+}
+
+@ApiTags('Customer Auth')
+@Controller('auth')
+export class CustomerAuthController {
+  constructor(private readonly authService: AuthService) {}
+
+  @Post('register')
+  async register(@Body() dto: CustomerRegisterDto) {
+    return this.authService.registerCustomer(dto);
+  }
+
+  @Post('login')
+  async login(@Body() dto: CustomerLoginDto) {
+    return this.authService.loginCustomer(dto);
+  }
+}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\auth\auth.module.ts 
+============================================================ 
+import { Global, Module } from '@nestjs/common';
+import { JwtModule } from '@nestjs/jwt';
+import { PassportModule } from '@nestjs/passport';
+import { ConfigService } from '@nestjs/config';
+import { AdminAuthController, CustomerAuthController } from './auth.controller';
+import { AuthService } from './auth.service';
+import { JwtStrategy } from './jwt.strategy';
+import { PrismaModule } from '../../prisma/prisma.module';
+
+@Global()
+@Module({
+  imports: [
+    PrismaModule,
+    PassportModule.register({ defaultStrategy: 'jwt' }),
+    JwtModule.registerAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        secret: config.get<string>('JWT_SECRET') || 'dev-jwt-secret-change-in-production',
+        signOptions: { expiresIn: '24h' },
+      }),
+    }),
+  ],
+  controllers: [AdminAuthController, CustomerAuthController],
+  providers: [AuthService, JwtStrategy],
+  exports: [JwtModule, AuthService],
+})
+export class AuthModule {}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\auth\auth.service.ts 
+============================================================ 
+import { ConflictException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
+import { PrismaService } from '../../prisma/prisma.service';
+import * as bcrypt from 'bcryptjs';
+import { LoginDto } from './dto/login.dto';
+import { RegisterDto } from './dto/register.dto';
+import { CustomerLoginDto, CustomerRegisterDto } from './dto/customer-auth.dto';
+import { AdminRole } from '@prisma/client';
+import { UpdateAdminUserDto } from './dto/update-admin-user.dto';
+
+@Injectable()
+export class AuthService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly jwtService: JwtService,
+  ) {}
+
+  async validateUser(email: string, password: string) {
+    const user = await this.prisma.adminUser.findUnique({ where: { email } });
+    if (!user || !user.isActive) return null;
+    
+    const isValid = await bcrypt.compare(password, user.passwordHash);
+    if (!isValid) return null;
+    
+    return user;
+  }
+
+  async login(dto: LoginDto) {
+    const user = await this.validateUser(dto.email, dto.password);
+    if (!user) {
+      throw new UnauthorizedException('البريد الإلكتروني أو كلمة المرور غير صحيحة');
+    }
+
+    const payload = {
+      sub: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      type: 'admin',
+    };
+    const accessToken = await this.jwtService.signAsync(payload);
+
+    return {
+      accessToken,
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        isActive: user.isActive,
+      },
+    };
+  }
+
+  async register(dto: RegisterDto) {
+    const existing = await this.prisma.adminUser.findUnique({ where: { email: dto.email } });
+    if (existing) {
+      throw new ConflictException('البريد الإلكتروني مستخدم بالفعل');
+    }
+
+    const passwordHash = await bcrypt.hash(dto.password, 10);
+    const user = await this.prisma.adminUser.create({
+      data: {
+        name: dto.name,
+        email: dto.email,
+        passwordHash,
+        role: dto.role ?? AdminRole.ORDERS_STAFF,
+        isActive: true,
+      },
+    });
+
+    return { id: user.id, name: user.name, email: user.email, role: user.role };
+  }
+
+  async getProfile(userId: string) {
+    const user = await this.prisma.adminUser.findUnique({ where: { id: userId } });
+    if (!user) return null;
+    return {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      isActive: user.isActive,
+    };
+  }
+
+  async listAdminUsers() {
+    return this.prisma.adminUser.findMany({
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        isActive: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async updateAdminUser(id: string, dto: UpdateAdminUserDto) {
+    const user = await this.prisma.adminUser.findUnique({ where: { id } });
+    if (!user) throw new NotFoundException('المستخدم غير موجود');
+
+    const data: any = {
+      name: dto.name,
+      email: dto.email,
+      role: dto.role,
+      isActive: dto.isActive,
+    };
+    Object.keys(data).forEach((key) => data[key] === undefined && delete data[key]);
+
+    if (dto.password) {
+      data.passwordHash = await bcrypt.hash(dto.password, 10);
+    }
+
+    const updated = await this.prisma.adminUser.update({
+      where: { id },
+      data,
+    });
+    return {
+      id: updated.id,
+      name: updated.name,
+      email: updated.email,
+      role: updated.role,
+      isActive: updated.isActive,
+    };
+  }
+
+  async deactivateAdminUser(id: string) {
+    const updated = await this.prisma.adminUser.update({
+      where: { id },
+      data: { isActive: false },
+    });
+    return {
+      id: updated.id,
+      name: updated.name,
+      email: updated.email,
+      role: updated.role,
+      isActive: updated.isActive,
+    };
+  }
+
+  async registerCustomer(dto: CustomerRegisterDto) {
+    const existing = await this.prisma.customer.findUnique({
+      where: { phone: dto.phone },
+    });
+    if (existing) {
+      throw new ConflictException('رقم الهاتف مسجل بالفعل، سجّل الدخول بكلمة السر');
+    }
+
+    const passwordHash = await bcrypt.hash(dto.password, 10);
+    const customer = await this.prisma.customer.create({
+      data: {
+        name: dto.name.trim(),
+        phone: dto.phone,
+        passwordHash,
+        isActive: true,
+      },
+    });
+
+    return this.createCustomerSession(customer);
+  }
+
+  async loginCustomer(dto: CustomerLoginDto) {
+    const customer = await this.prisma.customer.findUnique({
+      where: { phone: dto.phone },
+    });
+    if (!customer || !customer.isActive) {
+      throw new UnauthorizedException('رقم الهاتف أو كلمة السر غير صحيحة');
+    }
+
+    const isValid = await bcrypt.compare(dto.password, customer.passwordHash);
+    if (!isValid) {
+      throw new UnauthorizedException('رقم الهاتف أو كلمة السر غير صحيحة');
+    }
+
+    return this.createCustomerSession(customer);
+  }
+
+  private async createCustomerSession(customer: {
+    id: string;
+    name: string;
+    phone: string;
+    isActive: boolean;
+  }) {
+    const payload = {
+      sub: customer.id,
+      name: customer.name,
+      phone: customer.phone,
+      type: 'customer',
+    };
+    const accessToken = await this.jwtService.signAsync(payload);
+
+    return {
+      accessToken,
+      user: {
+        id: customer.id,
+        name: customer.name,
+        phone: customer.phone,
+        isActive: customer.isActive,
+      },
+    };
+  }
+}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\auth\jwt.strategy.ts 
+============================================================ 
+import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { PassportStrategy } from '@nestjs/passport';
+import { ExtractJwt, Strategy } from 'passport-jwt';
+
+@Injectable()
+export class JwtStrategy extends PassportStrategy(Strategy) {
+  constructor(configService: ConfigService) {
+    super({
+      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      ignoreExpiration: false,
+      secretOrKey: configService.get<string>('JWT_SECRET') || 'dev-jwt-secret-change-in-production',
+    });
+  }
+
+  async validate(payload: {
+    sub: string;
+    email?: string;
+    name: string;
+    phone?: string;
+    role?: string;
+    type?: string;
+  }) {
+    return {
+      id: payload.sub,
+      email: payload.email,
+      name: payload.name,
+      phone: payload.phone,
+      role: payload.role,
+      type: payload.type,
+    };
+  }
+}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\auth\dto\customer-auth.dto.ts 
+============================================================ 
+import { IsString, Matches, MinLength } from 'class-validator';
+
+export class CustomerLoginDto {
+  @IsString()
+  @Matches(/^\d{9}$/, { message: 'رقم الهاتف يجب أن يتكون من 9 أرقام' })
+  phone: string;
+
+  @IsString()
+  @MinLength(4, { message: 'كلمة السر يجب أن تكون 4 أحرف أو أرقام على الأقل' })
+  password: string;
+}
+
+export class CustomerRegisterDto extends CustomerLoginDto {
+  @IsString()
+  @MinLength(2, { message: 'يرجى إدخال الاسم' })
+  name: string;
+}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\auth\dto\login.dto.ts 
+============================================================ 
+import { IsEmail, IsString, MinLength } from 'class-validator';
+
+export class LoginDto {
+  @IsEmail()
+  email: string;
+
+  @IsString()
+  @MinLength(6)
+  password: string;
+}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\auth\dto\register.dto.ts 
+============================================================ 
+import { AdminRole } from '@prisma/client';
+import { IsEmail, IsEnum, IsOptional, IsString, MinLength } from 'class-validator';
+
+export class RegisterDto {
+  @IsString()
+  name: string;
+
+  @IsEmail()
+  email: string;
+
+  @IsString()
+  @MinLength(6)
+  password: string;
+
+  @IsOptional()
+  @IsEnum(AdminRole)
+  role?: AdminRole;
+}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\auth\dto\update-admin-user.dto.ts 
+============================================================ 
+import { AdminRole } from '@prisma/client';
+import { IsBoolean, IsEmail, IsEnum, IsOptional, IsString, MinLength } from 'class-validator';
+
+export class UpdateAdminUserDto {
+  @IsOptional()
+  @IsString()
+  name?: string;
+
+  @IsOptional()
+  @IsEmail()
+  email?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(6)
+  password?: string;
+
+  @IsOptional()
+  @IsEnum(AdminRole)
+  role?: AdminRole;
+
+  @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
+}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\categories\categories.controller.ts 
+============================================================ 
+import { Controller, Get, Param } from '@nestjs/common';
+import { ApiTags } from '@nestjs/swagger';
+import { CategoriesService } from './categories.service';
+
+@ApiTags('Categories')
+@Controller('categories')
+export class CategoriesController {
+  constructor(private readonly categoriesService: CategoriesService) {}
+
+  @Get()
+  findAll() {
+    return this.categoriesService.findPublic();
+  }
+
+  @Get(':id')
+  findOne(@Param('id') id: string) {
+    return this.categoriesService.findPublicById(id);
+  }
+}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\categories\categories.module.ts 
+============================================================ 
+import { Module } from '@nestjs/common';
+import { CategoriesController } from './categories.controller';
+import { CategoriesService } from './categories.service';
+
+@Module({
+  controllers: [CategoriesController],
+  providers: [CategoriesService],
+  exports: [CategoriesService],
+})
+export class CategoriesModule {}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\categories\categories.service.ts 
+============================================================ 
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { PrismaService } from '../../prisma/prisma.service';
+import { CreateCategoryDto } from './dto/create-category.dto';
+import { UpdateCategoryDto } from './dto/update-category.dto';
+
+@Injectable()
+export class CategoriesService {
+  constructor(private readonly prisma: PrismaService) {}
+
+  findPublic() {
+    return this.prisma.category.findMany({
+      where: { isActive: true },
+      orderBy: [{ sortOrder: 'asc' }, { createdAt: 'desc' }],
+    });
+  }
+
+  findAll() {
+    return this.prisma.category.findMany({
+      orderBy: [{ sortOrder: 'asc' }, { createdAt: 'desc' }],
+    });
+  }
+
+  async findPublicById(id: string) {
+    const category = await this.prisma.category.findFirst({
+      where: { id, isActive: true },
+    });
+
+    if (!category) {
+      throw new NotFoundException('Category not found');
+    }
+
+    return category;
+  }
+
+  create(data: CreateCategoryDto) {
+    return this.prisma.category.create({
+      data: {
+        ...data,
+        description: data.description ?? "",
+        imageUrl: data.imageUrl ?? "",
+      },
+    });
+  }
+
+  update(id: string, data: UpdateCategoryDto) {
+    return this.prisma.category.update({
+      where: { id },
+      data: {
+        ...data,
+        description: data.description ?? "",
+        imageUrl: data.imageUrl ?? "",
+      },
+    });
+  }
+
+  softDelete(id: string) {
+    return this.prisma.category.update({
+      where: { id },
+      data: { isActive: false },
+    });
+  }
+}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\categories\dto\create-category.dto.ts 
+============================================================ 
+import { IsInt, IsOptional, IsString, Min } from 'class-validator';
+
+export class CreateCategoryDto {
+  @IsString()
+  nameAr: string;
+
+  @IsString()
+  nameEn: string;
+
+  @IsOptional()
+  @IsString()
+  description?: string;
+
+  @IsOptional()
+  @IsString()
+  imageUrl?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  sortOrder?: number;
+}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\categories\dto\update-category.dto.ts 
+============================================================ 
+import { PartialType } from '@nestjs/mapped-types';
+import { IsBoolean, IsOptional } from 'class-validator';
+import { CreateCategoryDto } from './create-category.dto';
+
+export class UpdateCategoryDto extends PartialType(CreateCategoryDto) {
+  @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
+}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\delivery-zones\delivery-zones.controller.ts 
+============================================================ 
+import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { ApiTags } from '@nestjs/swagger';
+import { AdminRole } from '@prisma/client';
+import { AdminRoles } from '../../common/decorators/admin-roles.decorator';
+import { AdminTokenGuard } from '../../common/guards/admin-token.guard';
+import { DeliveryZonesService } from './delivery-zones.service';
+import { CreateDeliveryZoneDto } from './dto/create-delivery-zone.dto';
+import { UpdateDeliveryZoneDto } from './dto/update-delivery-zone.dto';
+
+@ApiTags('Delivery Zones')
+@Controller('delivery-zones')
+export class DeliveryZonesController {
+  constructor(private readonly deliveryZonesService: DeliveryZonesService) {}
+
+  @Get()
+  findAll() {
+    return this.deliveryZonesService.findAll();
+  }
+
+  @Get(':id')
+  findOne(@Param('id') id: string) {
+    return this.deliveryZonesService.findOne(id);
+  }
+
+  @Post()
+  @UseGuards(AdminTokenGuard)
+  @AdminRoles(AdminRole.ADMIN)
+  create(@Body() dto: CreateDeliveryZoneDto) {
+    return this.deliveryZonesService.create(dto);
+  }
+
+  @Patch(':id')
+  @UseGuards(AdminTokenGuard)
+  @AdminRoles(AdminRole.ADMIN)
+  update(@Param('id') id: string, @Body() dto: UpdateDeliveryZoneDto) {
+    return this.deliveryZonesService.update(id, dto);
+  }
+
+  @Delete(':id')
+  @UseGuards(AdminTokenGuard)
+  @AdminRoles(AdminRole.ADMIN)
+  delete(@Param('id') id: string) {
+    return this.deliveryZonesService.delete(id);
+  }
+}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\delivery-zones\delivery-zones.module.ts 
+============================================================ 
+import { Module } from '@nestjs/common';
+import { PrismaModule } from '../../prisma/prisma.module';
+import { DeliveryZonesController } from './delivery-zones.controller';
+import { DeliveryZonesService } from './delivery-zones.service';
+import { AuthModule } from '../auth/auth.module';
+
+@Module({
+  imports: [PrismaModule, AuthModule],
+  controllers: [DeliveryZonesController],
+  providers: [DeliveryZonesService],
+  exports: [DeliveryZonesService],
+})
+export class DeliveryZonesModule {}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\delivery-zones\delivery-zones.service.ts 
+============================================================ 
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { PrismaService } from '../../prisma/prisma.service';
+import { CreateDeliveryZoneDto } from './dto/create-delivery-zone.dto';
+import { UpdateDeliveryZoneDto } from './dto/update-delivery-zone.dto';
+
+@Injectable()
+export class DeliveryZonesService {
+  constructor(private readonly prisma: PrismaService) {}
+
+  async findAll() {
+    const zones = await this.prisma.deliveryZone.findMany({
+      where: { isActive: true },
+      orderBy: { nameAr: 'asc' },
+    });
+
+    if (zones.length === 0) {
+      return [
+        {
+          id: 'default',
+          nameAr: 'جميع المناطق',
+          nameEn: 'All Areas',
+          description: 'توصيل لجميع المناطق',
+          deliveryFee: 0,
+          estimatedMinutes: 30,
+          minOrderAmount: 10,
+          polygon: {},
+          isActive: true,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+      ];
+    }
+
+    return zones;
+  }
+
+  async findOne(id: string) {
+    const zone = await this.prisma.deliveryZone.findUnique({
+      where: { id },
+    });
+
+    if (!zone) {
+      throw new NotFoundException('Delivery zone not found');
+    }
+
+    return zone;
+  }
+
+  async create(dto: CreateDeliveryZoneDto) {
+    return this.prisma.deliveryZone.create({
+      data: {
+        nameAr: dto.nameAr,
+        nameEn: dto.nameEn,
+        description: dto.description || '',
+        deliveryFee: dto.deliveryFee,
+        estimatedMinutes: dto.estimatedMinutes || 30,
+        minOrderAmount: dto.minOrderAmount ?? 10,
+        polygon: dto.polygon || {},
+        isActive: true,
+      },
+    });
+  }
+
+  async update(id: string, dto: UpdateDeliveryZoneDto) {
+    await this.findOne(id);
+
+    return this.prisma.deliveryZone.update({
+      where: { id },
+      data: {
+        nameAr: dto.nameAr,
+        nameEn: dto.nameEn,
+        description: dto.description,
+        deliveryFee: dto.deliveryFee,
+        estimatedMinutes: dto.estimatedMinutes,
+        minOrderAmount: dto.minOrderAmount,
+        polygon: dto.polygon,
+      },
+    });
+  }
+
+  async delete(id: string) {
+    await this.findOne(id);
+
+    return this.prisma.deliveryZone.update({
+      where: { id },
+      data: { isActive: false },
+    });
+  }
+}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\delivery-zones\dto\create-delivery-zone.dto.ts 
+============================================================ 
+import { Type } from 'class-transformer';
+import { IsNotEmpty, IsNumber, IsObject, IsOptional, IsString, Min } from 'class-validator';
+
+export class CreateDeliveryZoneDto {
+  @IsString()
+  @IsNotEmpty()
+  nameAr: string;
+
+  @IsString()
+  @IsNotEmpty()
+  nameEn: string;
+
+  @IsString()
+  @IsOptional()
+  description?: string;
+
+  @IsNumber()
+  @Min(0)
+  @Type(() => Number)
+  deliveryFee: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(5)
+  @Type(() => Number)
+  estimatedMinutes?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Type(() => Number)
+  minOrderAmount?: number;
+
+  @IsOptional()
+  @IsObject()
+  polygon?: any;
+}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\delivery-zones\dto\update-delivery-zone.dto.ts 
+============================================================ 
+import { PartialType } from '@nestjs/mapped-types';
+import { CreateDeliveryZoneDto } from './create-delivery-zone.dto';
+
+export class UpdateDeliveryZoneDto extends PartialType(CreateDeliveryZoneDto) {}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\health\health.controller.ts 
+============================================================ 
+import { Controller, Get, ServiceUnavailableException } from '@nestjs/common';
+import { ApiTags } from '@nestjs/swagger';
+import { PrismaService } from '../../prisma/prisma.service';
+
+@ApiTags('Health')
+@Controller('health')
+export class HealthController {
+  constructor(private readonly prisma: PrismaService) {}
+
+  @Get()
+  async check() {
+    try {
+      await this.prisma.$queryRaw`SELECT 1`;
+      return {
+        status: 'ok',
+        service: 'sweet_cafe_backend',
+        db: 'connected',
+        timestamp: new Date().toISOString(),
+      };
+    } catch {
+      throw new ServiceUnavailableException({
+        status: 'error',
+        service: 'sweet_cafe_backend',
+        db: 'disconnected',
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\health\health.module.ts 
+============================================================ 
+import { Module } from '@nestjs/common';
+import { HealthController } from './health.controller';
+import { PrismaModule } from '../../prisma/prisma.module';
+
+@Module({
+  imports: [PrismaModule],
+  controllers: [HealthController],
+})
+export class HealthModule {}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\offers\offers.controller.ts 
+============================================================ 
+import { Controller, Get, Param } from '@nestjs/common';
+import { ApiTags } from '@nestjs/swagger';
+import { OffersService } from './offers.service';
+
+@ApiTags('Offers')
+@Controller('offers')
+export class OffersController {
+  constructor(private readonly offersService: OffersService) {}
+
+  @Get()
+  findActive() {
+    return this.offersService.findActive();
+  }
+}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\offers\offers.module.ts 
+============================================================ 
+import { Module } from '@nestjs/common';
+import { OffersController } from './offers.controller';
+import { OffersService } from './offers.service';
+
+@Module({
+  controllers: [OffersController],
+  providers: [OffersService],
+  exports: [OffersService],
+})
+export class OffersModule {}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\offers\offers.service.ts 
+============================================================ 
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { PrismaService } from '../../prisma/prisma.service';
+import { CreateOfferDto } from './dto/create-offer.dto';
+import { UpdateOfferDto } from './dto/update-offer.dto';
+
+@Injectable()
+export class OffersService {
+  constructor(private readonly prisma: PrismaService) {}
+
+  findActive() {
+    const now = new Date();
+    return this.prisma.offer.findMany({
+      where: {
+        isActive: true,
+        startsAt: { lte: now },
+        endsAt: { gte: now },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  findAll() {
+    return this.prisma.offer.findMany({
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  create(data: CreateOfferDto) {
+    return this.prisma.offer.create({
+      data: {
+        ...data,
+        description: data.description ?? "",
+        imageUrl: data.imageUrl ?? "",
+      },
+    });
+  }
+
+  update(id: string, data: UpdateOfferDto) {
+    return this.prisma.offer.update({
+      where: { id },
+      data: {
+        ...data,
+        description: data.description ?? "",
+        imageUrl: data.imageUrl ?? "",
+      },
+    });
+  }
+
+  async softDelete(id: string) {
+    const offer = await this.prisma.offer.findUnique({ where: { id } });
+    if (!offer) {
+      throw new NotFoundException('Offer not found');
+    }
+
+    return this.prisma.offer.update({
+      where: { id },
+      data: { isActive: false },
+    });
+  }
+}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\offers\dto\create-offer.dto.ts 
+============================================================ 
+import { Type } from 'class-transformer';
+import { IsDate, IsNumber, IsOptional, IsString, Max, Min } from 'class-validator';
+
+export class CreateOfferDto {
+  @IsString()
+  titleAr: string;
+
+  @IsString()
+  titleEn: string;
+
+  @IsOptional()
+  @IsString()
+  description?: string;
+
+  @IsOptional()
+  @IsString()
+  imageUrl?: string;
+
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  discountPercent: number;
+
+  @Type(() => Date)
+  @IsDate()
+  startsAt: Date;
+
+  @Type(() => Date)
+  @IsDate()
+  endsAt: Date;
+}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\offers\dto\update-offer.dto.ts 
+============================================================ 
+import { PartialType } from '@nestjs/mapped-types';
+import { IsBoolean, IsOptional } from 'class-validator';
+import { CreateOfferDto } from './create-offer.dto';
+
+export class UpdateOfferDto extends PartialType(CreateOfferDto) {
+  @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
+}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\orders\orders.controller.ts 
+============================================================ 
+import { Body, Controller, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { ApiTags } from '@nestjs/swagger';
+import { AdminRole } from '@prisma/client';
+import { AdminRoles } from '../../common/decorators/admin-roles.decorator';
+import { AdminTokenGuard } from '../../common/guards/admin-token.guard';
+import { OptionalJwtGuard } from '../../common/guards/optional-jwt.guard';
+import { CreateOrderDto } from './dto/create-order.dto';
+import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
+import { OrdersService } from './orders.service';
+
+@ApiTags('Orders')
+@Controller('orders')
+export class OrdersController {
+  constructor(private readonly ordersService: OrdersService) {}
+
+  @Post()
+  @UseGuards(OptionalJwtGuard)
+  create(@Body() dto: CreateOrderDto, @Req() req: any) {
+    return this.ordersService.create(dto, req.user);
+  }
+
+  @Get()
+  @UseGuards(AdminTokenGuard)
+  @AdminRoles(AdminRole.ORDERS_STAFF)
+  findAll(@Query('status') status: string, @Query('type') type: string) {
+    return this.ordersService.findAll(status, type);
+  }
+
+  @Get('track/:phone')
+  trackByPhone(@Param('phone') phone: string) {
+    return this.ordersService.findByPhone(phone);
+  }
+
+  @Get(':id')
+  findOne(@Param('id') id: string) {
+    return this.ordersService.findOne(id);
+  }
+
+  @Get('number/:orderNumber')
+  findByOrderNumber(@Param('orderNumber') orderNumber: string) {
+    return this.ordersService.findByOrderNumber(orderNumber);
+  }
+
+  @Patch(':id/status')
+  @UseGuards(AdminTokenGuard)
+  @AdminRoles(AdminRole.ORDERS_STAFF)
+  updateStatus(@Param('id') id: string, @Body() dto: UpdateOrderStatusDto) {
+    return this.ordersService.updateStatus(id, dto);
+  }
+}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\orders\orders.gateway.ts 
+============================================================ 
+import { WebSocketGateway, WebSocketServer, SubscribeMessage, MessageBody, ConnectedSocket } from '@nestjs/websockets';
+import { Server, Socket } from 'socket.io';
+import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { JwtService } from '@nestjs/jwt';
+import { PrismaService } from '../../prisma/prisma.service';
+
+@WebSocketGateway({ cors: { origin: '*' } })
+@Injectable()
+export class OrdersGateway {
+  @WebSocketServer()
+  server: Server;
+
+  private readonly logger = new Logger(OrdersGateway.name);
+
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly jwtService: JwtService,
+    private readonly prisma: PrismaService,
+  ) {}
+
+  handleConnection(client: Socket) {
+    this.logger.log(`Client connected: ${client.id}`);
+  }
+
+  handleDisconnect(client: Socket) {
+    this.logger.log(`Client disconnected: ${client.id}`);
+  }
+
+  broadcastNewOrder(order: any) {
+    this.server.to('orders-room').emit('newOrder', order);
+    this.logger.log(`Broadcasted new order: ${order.id}`);
+  }
+
+  broadcastOrderStatusUpdate(order: any) {
+    // Notify React Dashboard
+    this.server.to('orders-room').emit('orderStatusChanged', order);
+    
+    // Notify specific Flutter app customer
+    if (order.customerPhone) {
+      this.server.to(`customer-${order.customerPhone}`).emit('orderStatusChanged', {
+        id: order.id,
+        orderNumber: order.orderNumber,
+        status: order.status,
+        pickedUpAt: order.pickedUpAt,
+        deliveredAt: order.deliveredAt,
+      });
+    }
+  }
+
+  @SubscribeMessage('join-customer-room')
+  handleJoinCustomerRoom(@ConnectedSocket() client: Socket, @MessageBody() phone: string) {
+    client.join(`customer-${phone}`);
+    return { joined: true, room: `customer-${phone}` };
+  }
+
+  @SubscribeMessage('join-admin-room')
+  async handleJoinAdminRoom(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { token?: string; apiKey?: string },
+  ) {
+    // Validate either JWT token or API key
+    const expectedKey = this.configService.get<string>('app.adminApiKey');
+    const isValidApiKey = data && data.apiKey && data.apiKey === expectedKey;
+    const isValidToken = data?.token ? await this.isValidAdminToken(data.token) : false;
+    
+    if (!isValidApiKey && !isValidToken) {
+      client.emit('error', { message: 'مفتاح المصادقة غير صالح' });
+      return;
+    }
+    
+    client.join('orders-room');
+    this.logger.log(`Admin client ${client.id} joined orders room`);
+  }
+
+  private async isValidAdminToken(token: string) {
+    try {
+      const payload = await this.jwtService.verifyAsync(token);
+      if (!payload?.sub || payload.type !== 'admin') return false;
+
+      const user = await this.prisma.adminUser.findUnique({
+        where: { id: payload.sub },
+      });
+      return Boolean(user?.isActive);
+    } catch {
+      return false;
+    }
+  }
+}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\orders\orders.module.ts 
+============================================================ 
+import { Module } from '@nestjs/common';
+import { OrdersController } from './orders.controller';
+import { OrdersService } from './orders.service';
+import { OrdersGateway } from './orders.gateway';
+import { AuthModule } from '../auth/auth.module';
+
+@Module({
+  imports: [AuthModule],
+  controllers: [OrdersController],
+  providers: [OrdersService, OrdersGateway],
+  exports: [OrdersService],
+})
+export class OrdersModule {}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\orders\orders.service.ts 
+============================================================ 
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { OrderStatus, OrderType, Prisma } from '@prisma/client';
+import { PrismaService } from '../../prisma/prisma.service';
+import { CreateOrderDto, CreateOrderItemDto } from './dto/create-order.dto';
+import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
+import { OrdersGateway } from './orders.gateway';
+
+interface CalculatedOrderItem {
+  productId: string;
+  productName: string;
+  sizeName?: string;
+  quantity: number;
+  unitPrice: Prisma.Decimal;
+  totalPrice: Prisma.Decimal;
+  addons: Array<{ id: string; nameAr: string; nameEn: string; price: string }>;
+}
+
+@Injectable()
+export class OrdersService {
+  private readonly VALID_STATUS_TRANSITIONS: Record<string, Set<string>> = {
+    PENDING: new Set(['CONFIRMED', 'CANCELLED']),
+    NEW: new Set(['CONFIRMED', 'CANCELLED']),
+    CONFIRMED: new Set(['PREPARING', 'CANCELLED']),
+    PREPARING: new Set(['READY', 'CANCELLED']),
+    READY: new Set(['OUT_FOR_DELIVERY', 'CANCELLED']),
+    OUT_FOR_DELIVERY: new Set(['DELIVERED', 'CANCELLED']),
+    DELIVERED: new Set(),
+    CANCELLED: new Set(),
+  };
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly ordersGateway: OrdersGateway,
+  ) {}
+
+  async create(
+    dto: CreateOrderDto & { offerId?: string },
+    authUser?: { sub?: string; type?: string },
+  ) {
+    if (!dto.items || !dto.items.length) {
+      throw new BadRequestException('Order must contain at least one item');
+    }
+
+    const calculatedItems = await this.calculateItems(dto.items);
+    const subtotal = calculatedItems.reduce(
+      (sum, item) => sum.plus(item.totalPrice),
+      new Prisma.Decimal(0),
+    );
+
+    let zoneId = dto.deliveryZoneId;
+    let zone;
+
+    if (zoneId && zoneId !== 'default') {
+      zone = await this.prisma.deliveryZone.findUnique({
+        where: { id: zoneId },
+      });
+    }
+
+    // Fallback logic for takeaway or if no zones exist yet
+    if (!zone) {
+      // Try to find any active zone
+      zone = await this.prisma.deliveryZone.findFirst({
+        where: { isActive: true },
+      });
+      
+      if (!zone) {
+        // If still no zone, check if we can find ANY zone at all (even inactive)
+        zone = await this.prisma.deliveryZone.findFirst();
+      }
+
+      if (zone) {
+        zoneId = zone.id;
+      }
+    }
+
+    if (!zone) {
+      throw new BadRequestException('تعذر إتمام الطلب: لا توجد مناطق توصيل معرفة في النظام');
+    }
+
+    if (!zone.isActive && dto.orderType === OrderType.DELIVERY) {
+      throw new BadRequestException('منطقة التوصيل المختارة غير متاحة حالياً');
+    }
+
+    if (dto.orderType === OrderType.DELIVERY && subtotal.lt(zone.minOrderAmount)) {
+      const minAmountYER = Number(zone.minOrderAmount) * 100;
+      throw new BadRequestException(
+        `الحد الأدنى للطلب لهذه المنطقة هو ${minAmountYER} ر.ي`,
+      );
+    }
+
+    const deliveryFee = dto.orderType === OrderType.DELIVERY ? zone.deliveryFee : new Prisma.Decimal(0);
+    let discount = new Prisma.Decimal(0);
+
+    if (dto.offerId) {
+      const offer = await this.prisma.offer.findUnique({
+        where: { id: dto.offerId },
+      });
+      if (
+        offer &&
+        offer.isActive &&
+        offer.startsAt <= new Date() &&
+        offer.endsAt >= new Date()
+      ) {
+        discount = subtotal.mul(offer.discountPercent).div(100);
+      }
+    }
+
+    const totalAmount = subtotal.plus(deliveryFee).minus(discount);
+    const orderNumber = await this.nextOrderNumber();
+    let customerId: string | undefined;
+    let customerName = dto.customerName;
+    let customerPhone = dto.customerPhone;
+
+    if (authUser?.type === 'customer' && authUser.sub) {
+      const customer = await this.prisma.customer.findUnique({
+        where: { id: authUser.sub },
+      });
+      if (customer?.isActive) {
+        customerId = customer.id;
+        customerName = customer.name;
+        customerPhone = customer.phone;
+      }
+    }
+
+    const order = await this.prisma.order.create({
+      data: {
+        orderNumber,
+        customerId,
+        customerName,
+        customerPhone,
+        address: dto.address,
+        buildingNumber: dto.buildingNumber || '',
+        floor: dto.floor || '',
+        landmark: dto.landmark || '',
+        latitude: dto.latitude || 0,
+        longitude: dto.longitude || 0,
+        deliveryZoneId: zoneId,
+        orderType: dto.orderType || OrderType.DELIVERY,
+        notes: dto.notes || '',
+        paymentMethod: dto.paymentMethod || 'CASH',
+        subtotal,
+        deliveryFee,
+        discount,
+        totalAmount,
+        status: OrderStatus.NEW,
+        items: {
+          create: calculatedItems.map((item) => ({
+            productId: item.productId,
+            productName: item.productName,
+            sizeName: item.sizeName,
+            quantity: item.quantity,
+            unitPrice: item.unitPrice,
+            totalPrice: item.totalPrice,
+            addons: item.addons,
+          })),
+        },
+      },
+      include: { items: true, deliveryZone: true },
+    });
+
+    this.ordersGateway.broadcastNewOrder(order);
+
+    return order;
+  }
+
+  async findAll(status?: string, type?: string) {
+    const where: Prisma.OrderWhereInput = {};
+    if (status) where.status = status as OrderStatus;
+    if (type) where.orderType = type as OrderType;
+
+    return this.prisma.order.findMany({
+      where,
+      include: {
+        items: true,
+        deliveryZone: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async findByPhone(phone: string) {
+    return this.prisma.order.findMany({
+      where: { customerPhone: phone },
+      include: {
+        items: true,
+        deliveryZone: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async findOne(id: string) {
+    const order = await this.prisma.order.findUnique({
+      where: { id },
+      include: {
+        items: true,
+        deliveryZone: true,
+      },
+    });
+
+    if (!order) {
+      throw new NotFoundException('Order not found');
+    }
+
+    return order;
+  }
+
+  async findByOrderNumber(orderNumber: string) {
+    const order = await this.prisma.order.findUnique({
+      where: { orderNumber },
+      include: {
+        items: true,
+        deliveryZone: true,
+      },
+    });
+
+    if (!order) {
+      throw new NotFoundException(`الطلب رقم ${orderNumber} غير موجود`);
+    }
+
+    return order;
+  }
+
+  async updateStatus(id: string, dto: UpdateOrderStatusDto) {
+    const order = await this.prisma.order.findUnique({ where: { id } });
+    if (!order) throw new NotFoundException('Order not found');
+
+    const allowedTransitions = this.VALID_STATUS_TRANSITIONS[order.status];
+    if (!allowedTransitions?.has(dto.status)) {
+      throw new BadRequestException(
+        `لا يمكن تغيير حالة الطلب من "${order.status}" إلى "${dto.status}"`,
+      );
+    }
+
+    const updateData: any = { status: dto.status };
+
+    if (dto.status === OrderStatus.OUT_FOR_DELIVERY) {
+      updateData.pickedUpAt = new Date();
+    } else if (dto.status === OrderStatus.DELIVERED) {
+      updateData.deliveredAt = new Date();
+    }
+
+    const updated = await this.prisma.order.update({
+      where: { id },
+      data: updateData,
+      include: { items: true, deliveryZone: true },
+    });
+
+    this.ordersGateway.broadcastOrderStatusUpdate(updated);
+    return updated;
+  }
+
+  private async calculateItems(
+    items: CreateOrderItemDto[],
+  ): Promise<CalculatedOrderItem[]> {
+    const productIds = [...new Set(items.map((item) => item.productId))];
+    const products = await this.prisma.product.findMany({
+      where: { id: { in: productIds }, isActive: true },
+      include: {
+        sizes: true,
+        addons: { where: { isActive: true } },
+      },
+    });
+
+    return items.map((item) => {
+      const product = products.find(
+        (candidate) => candidate.id === item.productId,
+      );
+      if (!product) {
+        throw new BadRequestException(
+          `Product ${item.productId} was not found`,
+        );
+      }
+      if (!product.isAvailable) {
+        throw new BadRequestException(
+          `Product ${product.nameAr} is not available`,
+        );
+      }
+
+      const selectedSize = item.sizeId
+        ? product.sizes.find((size) => size.id === item.sizeId)
+        : product.sizes.find((size) => size.isDefault);
+
+      if (item.sizeId && !selectedSize) {
+        throw new BadRequestException(
+          `Invalid size for product ${product.nameAr}`,
+        );
+      }
+
+      const unitBasePrice = selectedSize?.price ?? product.price;
+      const requestedAddonIds = item.addonIds ?? [];
+      const selectedAddons = requestedAddonIds.map((addonId) => {
+        const addon = product.addons.find(
+          (candidate) => candidate.id === addonId,
+        );
+        if (!addon) {
+          throw new BadRequestException(
+            `Invalid addon for product ${product.nameAr}`,
+          );
+        }
+        return addon;
+      });
+
+      const addonTotal = selectedAddons.reduce(
+        (sum, addon) => sum.plus(addon.price),
+        new Prisma.Decimal(0),
+      );
+      const unitPrice = unitBasePrice.plus(addonTotal);
+      const totalPrice = unitPrice.mul(item.quantity);
+
+      return {
+        productId: product.id,
+        productName: product.nameAr,
+        sizeName: selectedSize?.name,
+        quantity: item.quantity,
+        unitPrice,
+        totalPrice,
+        addons: selectedAddons.map((addon) => ({
+          id: addon.id,
+          nameAr: addon.nameAr,
+          nameEn: addon.nameEn,
+          price: addon.price.toString(),
+        })),
+      };
+    });
+  }
+
+  private async nextOrderNumber(): Promise<string> {
+    const result = await this.prisma.$queryRaw<Array<{ value: number }>>`
+      INSERT INTO "Counter" ("key", "value")
+      VALUES ('order_number', 1)
+      ON CONFLICT ("key") DO UPDATE SET "value" = "Counter"."value" + 1
+      RETURNING "value"
+    `;
+    const num = result[0].value.toString().padStart(6, '0');
+    return `SC-${num}`;
+  }
+}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\orders\dto\admin-order-query.dto.ts 
+============================================================ 
+import { IsOptional, IsEnum, IsDateString, IsString, IsIn } from 'class-validator';
+import { PaginationQueryDto } from '../../../shared/dto/pagination-query.dto';
+import { OrderStatus, OrderType } from '@prisma/client';
+
+export class AdminOrderQueryDto extends PaginationQueryDto {
+  @IsOptional()
+  @IsEnum(OrderStatus)
+  status?: OrderStatus;
+
+  @IsOptional()
+  @IsEnum(OrderType)
+  type?: OrderType;
+
+  @IsOptional()
+  @IsDateString()
+  startDate?: string;
+
+  @IsOptional()
+  @IsDateString()
+  endDate?: string;
+
+  @IsOptional()
+  @IsString()
+  search?: string;
+
+  @IsOptional()
+  @IsIn(['createdAt', 'totalAmount', 'status', 'customerName'])
+  sortBy?: string;
+
+  @IsOptional()
+  @IsIn(['asc', 'desc'])
+  sortOrder?: string;
+}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\orders\dto\create-order.dto.ts 
+============================================================ 
+import { OrderType, PaymentMethod } from '@prisma/client';
+import { Type } from 'class-transformer';
+import {
+  ArrayMinSize,
+  IsArray,
+  IsEnum,
+  IsInt,
+  IsNotEmpty,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Min,
+  ValidateNested,
+} from 'class-validator';
+
+export class CreateOrderItemDto {
+  @IsString()
+  @IsNotEmpty()
+  productId: string;
+
+  @IsOptional()
+  @IsString()
+  sizeId: string;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  addonIds: string[];
+
+  @IsInt()
+  @Type(() => Number)
+  @Min(1)
+  quantity: number;
+}
+
+export class CreateOrderDto {
+  @IsString()
+  @IsNotEmpty()
+  customerName: string;
+
+  @IsString()
+  @IsNotEmpty()
+  customerPhone: string;
+
+  @IsOptional()
+  @IsString()
+  address: string;
+
+  @IsOptional()
+  @IsString()
+  buildingNumber: string;
+
+  @IsOptional()
+  @IsString()
+  floor: string;
+
+  @IsOptional()
+  @IsString()
+  landmark: string;
+
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  latitude: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  longitude: number;
+
+  @IsOptional()
+  @IsString()
+  deliveryZoneId: string;
+
+  @IsOptional()
+  @IsEnum(PaymentMethod)
+  paymentMethod: PaymentMethod;
+
+  @IsOptional()
+  @IsEnum(OrderType)
+  orderType: OrderType;
+
+  @IsOptional()
+  @IsString()
+  notes: string;
+
+  @IsOptional()
+  @IsString()
+  offerId?: string;
+
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreateOrderItemDto)
+  @ArrayMinSize(1)
+  items: CreateOrderItemDto[];
+} 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\orders\dto\update-order-status.dto.ts 
+============================================================ 
+import { IsEnum } from 'class-validator';
+import { OrderStatus } from '@prisma/client';
+
+export class UpdateOrderStatusDto {
+  @IsEnum(OrderStatus)
+  status: OrderStatus;
+} 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\products\products.controller.ts 
+============================================================ 
+import { Controller, Get, Param, Query } from '@nestjs/common';
+import { ApiTags } from '@nestjs/swagger';
+import { ProductQueryDto } from './dto/product-query.dto';
+import { ProductsService } from './products.service';
+
+@ApiTags('Products')
+@Controller('products')
+export class ProductsController {
+  constructor(private readonly productsService: ProductsService) {}
+
+  @Get()
+  findAll(@Query() query: ProductQueryDto) {
+    return this.productsService.findPublic(query);
+  }
+
+  @Get('featured')
+  findFeatured(@Query() query: ProductQueryDto) {
+    return this.productsService.findPublic({ ...query, isFeatured: true });
+  }
+
+  @Get('best-sellers')
+  findBestSellers(@Query() query: ProductQueryDto) {
+    return this.productsService.findPublic({ ...query, isBestSeller: true });
+  }
+
+  @Get('category/:categoryId')
+  findByCategory(@Param('categoryId') categoryId: string, @Query() query: ProductQueryDto) {
+    return this.productsService.findPublic({ ...query, categoryId });
+  }
+
+  @Get(':id')
+  findOne(@Param('id') id: string) {
+    return this.productsService.findPublicById(id);
+  }
+}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\products\products.module.ts 
+============================================================ 
+import { Module } from '@nestjs/common';
+import { ProductsController } from './products.controller';
+import { ProductsService } from './products.service';
+
+@Module({
+  controllers: [ProductsController],
+  providers: [ProductsService],
+  exports: [ProductsService],
+})
+export class ProductsModule {}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\products\products.service.ts 
+============================================================ 
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
+import { paginationSkip, buildPaginationMeta } from '../../common/utils/pagination.util';
+import { PrismaService } from '../../prisma/prisma.service';
+import { paginatedResponse } from '../../shared/response/response-builder';
+import { CreateProductDto } from './dto/create-product.dto';
+import { ProductQueryDto } from './dto/product-query.dto';
+import { UpdateProductDto } from './dto/update-product.dto';
+
+@Injectable()
+export class ProductsService {
+  constructor(private readonly prisma: PrismaService) {}
+
+  async findPublic(query: ProductQueryDto) {
+    return this.findMany(query, false);
+  }
+
+  async findAdmin(query: ProductQueryDto) {
+    return this.findMany(query, true);
+  }
+
+  private async findMany(query: ProductQueryDto, includeInactive: boolean) {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 12;
+    const where = this.buildWhere(query, includeInactive);
+    const orderBy = this.buildOrderBy(query);
+
+    const [data, total] = await this.prisma.$transaction([
+      this.prisma.product.findMany({
+        where,
+        include: this.productDetailsInclude(),
+        orderBy,
+        skip: paginationSkip(page, limit),
+        take: limit,
+      }),
+      this.prisma.product.count({ where }),
+    ]);
+
+    return paginatedResponse(data, buildPaginationMeta(page, limit, total));
+  }
+
+  async findPublicById(id: string) {
+    const product = await this.prisma.product.findFirst({
+      where: { id, isActive: true },
+      include: this.productDetailsInclude(),
+    });
+
+    if (!product) {
+      throw new NotFoundException('Product not found');
+    }
+
+    return product;
+  }
+
+  async findAdminById(id: string) {
+    const product = await this.prisma.product.findUnique({
+      where: { id },
+      include: this.productDetailsInclude(),
+    });
+
+    if (!product) {
+      throw new NotFoundException('Product not found');
+    }
+
+    return product;
+  }
+
+  create(data: CreateProductDto) {
+    const { sizes, addons, galleryImages, ...productData } = data;
+    return this.prisma.product.create({
+      data: {
+        ...productData,
+        description: data.description ?? "",
+        imageUrl: data.imageUrl ?? "",
+        oldPrice: data.oldPrice ?? 0,
+        galleryImages: galleryImages ?? [],
+        sizes: sizes?.length ? { create: sizes } : undefined,
+        addons: addons?.length ? { create: addons } : undefined,
+      },
+      include: this.productDetailsInclude(),
+    });
+  }
+
+  update(id: string, data: UpdateProductDto) {
+    const { sizes, addons, galleryImages, ...productData } = data;
+    return this.prisma.product.update({
+      where: { id },
+      data: {
+        ...productData,
+        ...(galleryImages !== undefined ? { galleryImages } : {}),
+        ...(sizes
+          ? {
+              sizes: {
+                deleteMany: {},
+                create: sizes,
+              },
+            }
+          : {}),
+        ...(addons
+          ? {
+              addons: {
+                deleteMany: {},
+                create: addons,
+              },
+            }
+          : {}),
+      },
+      include: this.productDetailsInclude(),
+    });
+  }
+
+  softDelete(id: string) {
+    return this.prisma.product.update({
+      where: { id },
+      data: { isActive: false, isAvailable: false },
+    });
+  }
+
+  private buildWhere(query: ProductQueryDto, includeInactive = false): Prisma.ProductWhereInput {
+    return {
+      ...(includeInactive ? {} : { isActive: true }),
+      ...(includeInactive && query.isActive !== undefined ? { isActive: query.isActive } : {}),
+      ...(query.categoryId ? { categoryId: query.categoryId } : {}),
+      ...(query.isAvailable !== undefined ? { isAvailable: query.isAvailable } : {}),
+      ...(query.isFeatured !== undefined ? { isFeatured: query.isFeatured } : {}),
+      ...(query.isBestSeller !== undefined ? { isBestSeller: query.isBestSeller } : {}),
+      ...(query.minPrice !== undefined || query.maxPrice !== undefined
+        ? {
+            price: {
+              ...(query.minPrice !== undefined ? { gte: query.minPrice } : {}),
+              ...(query.maxPrice !== undefined ? { lte: query.maxPrice } : {}),
+            },
+          }
+        : {}),
+      ...(query.search
+        ? {
+            OR: [
+              { nameAr: { contains: query.search, mode: 'insensitive' } },
+              { nameEn: { contains: query.search, mode: 'insensitive' } },
+              { description: { contains: query.search, mode: 'insensitive' } },
+            ],
+          }
+        : {}),
+    };
+  }
+
+  private buildOrderBy(query: ProductQueryDto): Prisma.ProductOrderByWithRelationInput[] {
+    const sortBy = query.sortBy ?? 'sortOrder';
+    const sortOrder = query.sortOrder ?? 'asc';
+    return [{ [sortBy]: sortOrder }, { createdAt: 'desc' }];
+  }
+
+  private productDetailsInclude() {
+    return {
+      category: true,
+      sizes: { orderBy: { price: 'asc' as const } },
+      addons: { where: { isActive: true }, orderBy: { price: 'asc' as const } },
+    };
+  }
+}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\products\dto\create-product.dto.ts 
+============================================================ 
+import { Type } from 'class-transformer';
+import {
+  IsArray,
+  IsBoolean,
+  IsInt,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Min,
+  ValidateNested,
+} from 'class-validator';
+
+export class CreateProductSizeDto {
+  @IsString()
+  name: string;
+
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  price: number;
+
+  @IsOptional()
+  @IsBoolean()
+  isDefault?: boolean;
+}
+
+export class CreateProductAddonDto {
+  @IsString()
+  nameAr: string;
+
+  @IsString()
+  nameEn: string;
+
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  price: number;
+
+  @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
+}
+
+export class CreateProductDto {
+  @IsString()
+  categoryId: string;
+
+  @IsString()
+  nameAr: string;
+
+  @IsString()
+  nameEn: string;
+
+  @IsOptional()
+  @IsString()
+  description?: string;
+
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  price: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  oldPrice?: number;
+
+  @IsOptional()
+  @IsString()
+  imageUrl?: string;
+
+  @IsOptional()
+  @IsArray()
+  galleryImages?: string[];
+
+  @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  isAvailable?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  isFeatured?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  isBestSeller?: boolean;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  sortOrder?: number;
+
+  @IsOptional()
+  @ValidateNested({ each: true })
+  @Type(() => CreateProductSizeDto)
+  sizes?: CreateProductSizeDto[];
+
+  @IsOptional()
+  @ValidateNested({ each: true })
+  @Type(() => CreateProductAddonDto)
+  addons?: CreateProductAddonDto[];
+}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\products\dto\product-query.dto.ts 
+============================================================ 
+import { Type } from 'class-transformer';
+import { IsBoolean, IsIn, IsNumber, IsOptional, IsString, Min } from 'class-validator';
+import { PaginationQueryDto } from '../../../shared/dto/pagination-query.dto';
+
+export class ProductQueryDto extends PaginationQueryDto {
+  @IsOptional()
+  @IsString()
+  search?: string;
+
+  @IsOptional()
+  @IsString()
+  categoryId?: string;
+
+  @IsOptional()
+  @Type(() => Boolean)
+  @IsBoolean()
+  isActive?: boolean;
+
+  @IsOptional()
+  @Type(() => Boolean)
+  @IsBoolean()
+  isAvailable?: boolean;
+
+  @IsOptional()
+  @Type(() => Boolean)
+  @IsBoolean()
+  isFeatured?: boolean;
+
+  @IsOptional()
+  @Type(() => Boolean)
+  @IsBoolean()
+  isBestSeller?: boolean;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  minPrice?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  maxPrice?: number;
+
+  @IsOptional()
+  @IsIn(['createdAt', 'price', 'nameAr', 'sortOrder'])
+  sortBy: 'createdAt' | 'price' | 'nameAr' | 'sortOrder' = 'sortOrder';
+
+  @IsOptional()
+  @IsIn(['asc', 'desc'])
+  sortOrder: 'asc' | 'desc' = 'asc';
+}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\products\dto\update-product.dto.ts 
+============================================================ 
+import { PartialType } from '@nestjs/mapped-types';
+import { IsBoolean, IsOptional } from 'class-validator';
+import { CreateProductDto } from './create-product.dto';
+
+export class UpdateProductDto extends PartialType(CreateProductDto) {
+  @IsOptional()
+  @IsBoolean()
+  isAvailable?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
+}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\settings\settings.controller.ts 
+============================================================ 
+import { Body, Controller, Get, Patch, UseGuards } from '@nestjs/common';
+import { ApiTags } from '@nestjs/swagger';
+import { AdminRole } from '@prisma/client';
+import { AdminRoles } from '../../common/decorators/admin-roles.decorator';
+import { AdminTokenGuard } from '../../common/guards/admin-token.guard';
+import { SettingsService } from './settings.service';
+
+@ApiTags('Settings')
+@Controller('admin/settings')
+@UseGuards(AdminTokenGuard)
+export class AdminSettingsController {
+  constructor(private readonly settingsService: SettingsService) {}
+
+  @Get()
+  async getAll() {
+    return this.settingsService.getAll();
+  }
+
+  @Patch()
+  @AdminRoles(AdminRole.ADMIN)
+  async updateSettings(@Body() dto: Record<string, string>) {
+    for (const [key, value] of Object.entries(dto)) {
+      await this.settingsService.set(key, value);
+    }
+    return this.settingsService.getAll();
+  }
+}
+
+@ApiTags('Settings')
+@Controller('settings')
+export class PublicSettingsController {
+  constructor(private readonly settingsService: SettingsService) {}
+
+  @Get()
+  async getPublic() {
+    return this.settingsService.getPublic();
+  }
+}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\settings\settings.module.ts 
+============================================================ 
+import { Module } from '@nestjs/common';
+import { PrismaModule } from '../../prisma/prisma.module';
+import { AdminSettingsController, PublicSettingsController } from './settings.controller';
+import { SettingsService } from './settings.service';
+import { AuthModule } from '../auth/auth.module';
+
+@Module({
+  imports: [PrismaModule, AuthModule],
+  controllers: [AdminSettingsController, PublicSettingsController],
+  providers: [SettingsService],
+  exports: [SettingsService],
+})
+export class SettingsModule {}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\settings\settings.service.ts 
+============================================================ 
+import { Injectable } from '@nestjs/common';
+import { PrismaService } from '../../prisma/prisma.service';
+
+@Injectable()
+export class SettingsService {
+  constructor(private readonly prisma: PrismaService) {}
+
+  async get(key: string): Promise<string | null> {
+    const setting = await this.prisma.settings.findUnique({ where: { key } });
+    return setting?.value ?? null;
+  }
+
+  async set(key: string, value: string): Promise<void> {
+    await this.prisma.settings.upsert({
+      where: { key },
+      update: { value },
+      create: { key, value },
+    });
+  }
+
+  async getAll(): Promise<Record<string, string>> {
+    const settings = await this.prisma.settings.findMany();
+    return Object.fromEntries(settings.map(s => [s.key, s.value]));
+  }
+
+  async getPublic(): Promise<Record<string, string>> {
+    const publicKeys = ['business_hours', 'contact_phone', 'contact_email', 'address', 'whatsapp_number'];
+    const settings = await this.prisma.settings.findMany({ where: { key: { in: publicKeys } } });
+    return Object.fromEntries(settings.map(s => [s.key, s.value]));
+  }
+}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\uploads\uploads.controller.ts 
+============================================================ 
+import {
+  BadRequestException,
+  Controller,
+  Post,
+  UploadedFile,
+  UseGuards,
+  UseInterceptors,
+} from '@nestjs/common';
+import { ApiTags, ApiConsumes, ApiBody } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { AdminRole } from '@prisma/client';
+import { AdminRoles } from '../../common/decorators/admin-roles.decorator';
+import { AdminTokenGuard } from '../../common/guards/admin-token.guard';
+import { UploadsService } from './uploads.service';
+
+@ApiTags('Uploads')
+@UseGuards(AdminTokenGuard)
+@Controller('admin/uploads')
+export class UploadsController {
+  constructor(private readonly uploadsService: UploadsService) {}
+
+  @Post()
+  @AdminRoles(AdminRole.PRODUCTS_STAFF)
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: {
+          type: 'string',
+          format: 'binary',
+        },
+      },
+    },
+  })
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: 5 * 1024 * 1024 },
+    }),
+  )
+  upload(@UploadedFile() file?: Express.Multer.File) {
+    if (!file) {
+      throw new BadRequestException('Image file is required');
+    }
+
+    return this.uploadsService.uploadProductImage(file);
+  }
+}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\uploads\uploads.module.ts 
+============================================================ 
+import { Module } from '@nestjs/common';
+import { UploadsController } from './uploads.controller';
+import { UploadsService } from './uploads.service';
+
+@Module({
+  controllers: [UploadsController],
+  providers: [UploadsService],
+  exports: [UploadsService],
+})
+export class UploadsModule {}
+ 
+============================================================ 
+FILE: E:\New folder\untitled7\untitled7\backend\src\modules\uploads\uploads.service.ts 
+============================================================ 
+import { BadRequestException, Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { promises as fs } from 'fs';
+import { extname, join } from 'path';
+
+const allowedMimeTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+
+@Injectable()
+export class UploadsService {
+  constructor(private readonly configService: ConfigService) {}
+
+  async uploadProductImage(file: Express.Multer.File) {
+    if (!allowedMimeTypes.includes(file.mimetype)) {
+      throw new BadRequestException('Only jpg, jpeg, png and webp images are allowed');
+    }
+
+    await fs.mkdir(join(process.cwd(), 'public'), { recursive: true });
+    
+    const uploadPath = this.configService.get<string>('app.uploadPath') ?? 'public/uploads/products';
+    await fs.mkdir(uploadPath, { recursive: true });
+
+    const extension = extname(file.originalname).toLowerCase() || this.extensionFromMime(file.mimetype);
+    const fileName = `product-${Date.now()}-${Math.round(Math.random() * 1_000_000)}${extension}`;
+    const filePath = join(uploadPath, fileName);
+    await fs.writeFile(filePath, file.buffer);
+
+    return {
+      fileName,
+      size: file.size,
+      mimeType: file.mimetype,
+      url: `/uploads/products/${fileName}`,
+    };
+  }
+
+  private extensionFromMime(mimeType: string) {
+    if (mimeType === 'image/png') {
+      return '.png';
+    }
+    if (mimeType === 'image/webp') {
+      return '.webp';
+    }
+    return '.jpg';
+  }
+}

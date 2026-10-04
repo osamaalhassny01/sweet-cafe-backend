@@ -1,0 +1,223 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Category {
+  id          String    @id @default(uuid())
+  nameAr      String
+  nameEn      String
+  description String
+  imageUrl    String
+  sortOrder   Int       @default(0)
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  products    Product[]
+
+  @@index([isActive, sortOrder])
+}
+
+model Product {
+  id            String         @id @default(uuid())
+  categoryId    String
+  nameAr        String
+  nameEn        String
+  description   String
+  price         Decimal        @db.Decimal(10, 2)
+  oldPrice      Decimal        @db.Decimal(10, 2)
+  imageUrl      String
+  galleryImages Json           @default("[]")
+  isActive      Boolean        @default(true)
+  isAvailable   Boolean        @default(true)
+  isFeatured    Boolean        @default(false)
+  isBestSeller  Boolean        @default(false)
+  sortOrder     Int            @default(0)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  orderItems    OrderItem[]
+  category      Category       @relation(fields: [categoryId], references: [id])
+  addons        ProductAddon[]
+  sizes         ProductSize[]
+
+  @@index([categoryId])
+  @@index([isActive, isAvailable])
+  @@index([isFeatured, isBestSeller])
+  @@index([price])
+}
+
+model ProductSize {
+  id        String  @id @default(uuid())
+  productId String
+  name      String
+  price     Decimal @db.Decimal(10, 2)
+  isDefault Boolean @default(false)
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId])
+}
+
+model ProductAddon {
+  id        String  @id @default(uuid())
+  productId String
+  nameAr    String
+  nameEn    String
+  price     Decimal @db.Decimal(10, 2)
+  isActive  Boolean @default(true)
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId, isActive])
+}
+
+model Offer {
+  id              String   @id @default(uuid())
+  titleAr         String
+  titleEn         String
+  description     String
+  imageUrl        String
+  discountPercent Int
+  startsAt        DateTime
+  endsAt          DateTime
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  orders          Order[]
+
+  @@index([isActive, startsAt, endsAt])
+}
+
+model DeliveryZone {
+  id               String   @id @default(uuid())
+  nameAr           String
+  nameEn           String
+  description      String
+  deliveryFee      Decimal  @db.Decimal(10, 2)
+  estimatedMinutes Int      @default(30)
+  minOrderAmount   Decimal  @db.Decimal(10, 2)
+  polygon          Json
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  orders           Order[]
+
+  @@index([isActive])
+}
+
+model Order {
+  id             String        @id @default(uuid())
+  orderNumber    String        @unique
+  customerName   String
+  customerPhone  String
+  orderType      OrderType     @default(DELIVERY)
+  paymentMethod  PaymentMethod @default(CASH)
+  notes          String
+  subtotal       Decimal       @db.Decimal(10, 2)
+  deliveryFee    Decimal       @default(0) @db.Decimal(10, 2)
+  discount       Decimal       @default(0) @db.Decimal(10, 2)
+  status         OrderStatus   @default(NEW)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  buildingNumber String
+  deliveredAt    DateTime?
+  deliveryZoneId String
+  floor          String
+  landmark       String
+  latitude       Float
+  longitude      Float
+  pickedUpAt     DateTime?
+  address        String
+  totalAmount    Decimal       @db.Decimal(10, 2)
+  offerId        String?
+  customerId     String?
+  customer       Customer?     @relation(fields: [customerId], references: [id])
+  deliveryZone   DeliveryZone  @relation(fields: [deliveryZoneId], references: [id])
+  offer          Offer?        @relation(fields: [offerId], references: [id])
+  items          OrderItem[]
+
+  @@index([status, createdAt])
+  @@index([orderType])
+  @@index([customerPhone])
+  @@index([customerId])
+  @@index([deliveryZoneId])
+}
+
+model OrderItem {
+  id          String   @id @default(uuid())
+  orderId     String
+  productId   String?
+  productName String
+  sizeName    String?
+  quantity    Int
+  unitPrice   Decimal  @db.Decimal(10, 2)
+  totalPrice  Decimal  @db.Decimal(10, 2)
+  addons      Json     @default("[]")
+  order       Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product     Product? @relation(fields: [productId], references: [id])
+}
+
+model AdminUser {
+  id           String    @id @default(uuid())
+  name         String
+  email        String    @unique
+  passwordHash String
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  role         AdminRole @default(ADMIN)
+}
+
+model Customer {
+  id           String   @id @default(uuid())
+  name         String
+  phone        String   @unique
+  passwordHash String
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  orders       Order[]
+}
+
+model Counter {
+  key   String @id
+  value Int    @default(1)
+}
+
+model Settings {
+  id        Int      @id @default(autoincrement())
+  key       String   @unique
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+enum OrderStatus {
+  NEW
+  PREPARING
+  READY
+  DELIVERED
+  CANCELLED
+  CONFIRMED
+  OUT_FOR_DELIVERY
+  PENDING
+}
+
+enum OrderType {
+  DELIVERY
+  TAKEAWAY
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  WALLET
+  ONLINE
+}
+
+enum AdminRole {
+  ADMIN
+  ORDERS_STAFF
+  PRODUCTS_STAFF
+}

@@ -1,0 +1,14 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.ErrorCodes = void 0;
+exports.ErrorCodes = {
+    PRODUCT_NOT_FOUND: 'PRODUCT_NOT_FOUND',
+    PRODUCT_UNAVAILABLE: 'PRODUCT_UNAVAILABLE',
+    INVALID_PRODUCT_SIZE: 'INVALID_PRODUCT_SIZE',
+    INVALID_PRODUCT_ADDON: 'INVALID_PRODUCT_ADDON',
+    ORDER_NOT_FOUND: 'ORDER_NOT_FOUND',
+    CATEGORY_NOT_FOUND: 'CATEGORY_NOT_FOUND',
+    OFFER_NOT_FOUND: 'OFFER_NOT_FOUND',
+    UPLOAD_INVALID_FILE: 'UPLOAD_INVALID_FILE',
+};
+//# sourceMappingURL=error-codes.js.map
