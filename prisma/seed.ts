@@ -81,23 +81,29 @@ async function main() {
   }
   console.log('Categories seeded.');
 
-  // 1.1 Seed Admin User
-  const adminEmail = process.env.ADMIN_EMAIL || 'admin@sweetcafe.local';
-  const adminPassword = process.env.ADMIN_PASSWORD || 'change-me';
-  const passwordHash = await bcrypt.hash(adminPassword, 10);
+  // 1.1 Seed Admin Users
+  const easyAdmins = [
+    { email: 'admin@admin.com', name: 'Admin User', pass: '123456' },
+    { email: 'admin@cafe.com', name: 'Cafe Admin', pass: '123' },
+    { email: 'admin@sweet.com', name: 'Sweet Admin', pass: '123456' },
+    { email: 'admin@sweetcafe.local', name: 'Super Admin', pass: '123456' },
+  ];
 
-  await prisma.adminUser.upsert({
-    where: { email: adminEmail },
-    update: { passwordHash },
-    create: {
-      name: 'Super Admin',
-      email: adminEmail,
-      passwordHash,
-      role: AdminRole.ADMIN,
-      isActive: true,
-    },
-  });
-  console.log(`Admin user seeded: ${adminEmail}`);
+  for (const adm of easyAdmins) {
+    const passwordHash = await bcrypt.hash(adm.pass, 10);
+    await prisma.adminUser.upsert({
+      where: { email: adm.email },
+      update: { passwordHash, isActive: true },
+      create: {
+        name: adm.name,
+        email: adm.email,
+        passwordHash,
+        role: AdminRole.ADMIN,
+        isActive: true,
+      },
+    });
+    console.log(`Seeded admin: ${adm.email} (password: ${adm.pass})`);
+  }
 
   // 1.2 Seed Default Delivery Zone
   const defaultZone = await prisma.deliveryZone.upsert({
