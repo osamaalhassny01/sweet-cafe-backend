@@ -53,8 +53,8 @@ async function bootstrap() {
   SwaggerModule.setup('api/docs', app, document);
 
   const port = configService.get<number>('app.port') ?? 3000;
-  await app.listen(port);
-  logger.log(`Kafi Bun API is running on http://localhost:${port}`);
+  await app.listen(port, '0.0.0.0');
+  logger.log(`Kafi Bun API is running on http://0.0.0.0:${port}`);
 }
 
 bootstrap();
